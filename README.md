@@ -1,7 +1,5 @@
 # StockSense: Financial Data Analyzer
 
-![Stock Analysis](generated-icon.png)
-
 ## Overview
 
 StockSense is a powerful financial data analysis application built with Streamlit that allows users to analyze stocks and cryptocurrencies in real-time. The application fetches data from Yahoo Finance and provides interactive charts and technical indicators to help users make informed investment decisions.
