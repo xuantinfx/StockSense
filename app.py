@@ -152,12 +152,15 @@ def format_percent(value):
     return f"{value:.2f}%"
 
 # Main app
-st.title("📈 Stock Data Analyzer")
+st.title("📈 Stock & Crypto Data Analyzer")
 
 # User input
-st.sidebar.header("Enter Stock Symbol")
-ticker_input = st.sidebar.text_input("Stock Symbol (e.g., AAPL, MSFT, GOOGL)", "AAPL")
+st.sidebar.header("Enter Symbol")
+ticker_input = st.sidebar.text_input("Stock/Crypto Symbol (e.g., AAPL, MSFT, BTC-USD, ETH-USD)", "AAPL")
 ticker = ticker_input.upper().strip()
+
+# Asset type
+asset_type = st.sidebar.radio("Asset Type", ["Stock", "Cryptocurrency"])
 
 # Time period selection
 period_options = {
@@ -180,7 +183,8 @@ tech_indicators = st.sidebar.multiselect(
 )
 
 # Fetch data button
-if st.sidebar.button("Fetch Stock Data"):
+button_label = "Fetch Data" if asset_type == "Cryptocurrency" else "Fetch Stock Data"
+if st.sidebar.button(button_label):
     # Show loading spinner
     with st.spinner(f"Fetching data for {ticker}..."):
         # Get data
@@ -190,11 +194,13 @@ if st.sidebar.button("Fetch Stock Data"):
             # Success message
             st.sidebar.success(f"Data fetched successfully for {ticker}")
             
-            # Company info
-            st.header(f"{stock_info.get('shortName', ticker)} ({ticker})")
+            # Asset info
+            asset_name = stock_info.get('shortName', ticker)
+            st.header(f"{asset_name} ({ticker})")
             
-            # Company description
-            with st.expander("Company Description"):
+            # Description
+            description_label = "Description" if asset_type == "Cryptocurrency" else "Company Description"
+            with st.expander(description_label):
                 st.write(stock_info.get('longBusinessSummary', 'No description available'))
             
             # Key metrics
@@ -235,23 +241,67 @@ if st.sidebar.button("Fetch Stock Data"):
             # Additional metrics
             col1, col2, col3, col4 = st.columns(4)
             
-            with col1:
-                pe_ratio = stock_info.get('trailingPE', None)
-                st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+            if asset_type == "Cryptocurrency":
+                with col1:
+                    market_cap_rank = stock_info.get('marketCapRank', None)
+                    st.metric("Market Cap Rank", f"#{market_cap_rank}" if market_cap_rank else "N/A")
                 
-            with col2:
-                dividend_yield = stock_info.get('dividendYield', None)
-                if dividend_yield:
-                    dividend_yield *= 100  # Convert to percentage
-                st.metric("Dividend Yield", format_percent(dividend_yield) if dividend_yield else "N/A")
+                with col2:
+                    circulating_supply = stock_info.get('circulatingSupply', None)
+                    if circulating_supply:
+                        if circulating_supply >= 1e9:
+                            supply_str = f"{circulating_supply/1e9:.2f}B"
+                        elif circulating_supply >= 1e6:
+                            supply_str = f"{circulating_supply/1e6:.2f}M"
+                        else:
+                            supply_str = f"{circulating_supply:.0f}"
+                        st.metric("Circulating Supply", supply_str)
+                    else:
+                        st.metric("Circulating Supply", "N/A")
                 
-            with col3:
-                eps = stock_info.get('trailingEps', None)
-                st.metric("EPS (TTM)", format_currency(eps) if eps else "N/A")
+                with col3:
+                    total_supply = stock_info.get('totalSupply', None)
+                    if total_supply:
+                        if total_supply >= 1e9:
+                            supply_str = f"{total_supply/1e9:.2f}B"
+                        elif total_supply >= 1e6:
+                            supply_str = f"{total_supply/1e6:.2f}M"
+                        else:
+                            supply_str = f"{total_supply:.0f}"
+                        st.metric("Total Supply", supply_str)
+                    else:
+                        st.metric("Total Supply", "N/A")
                 
-            with col4:
-                target_price = stock_info.get('targetMeanPrice', None)
-                st.metric("Target Price", format_currency(target_price) if target_price else "N/A")
+                with col4:
+                    max_supply = stock_info.get('maxSupply', None)
+                    if max_supply:
+                        if max_supply >= 1e9:
+                            supply_str = f"{max_supply/1e9:.2f}B"
+                        elif max_supply >= 1e6:
+                            supply_str = f"{max_supply/1e6:.2f}M"
+                        else:
+                            supply_str = f"{max_supply:.0f}"
+                        st.metric("Max Supply", supply_str)
+                    else:
+                        st.metric("Max Supply", "N/A")
+            else:
+                with col1:
+                    pe_ratio = stock_info.get('trailingPE', None)
+                    st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
+                    
+                with col2:
+                    dividend_yield = stock_info.get('dividendYield', None)
+                    if dividend_yield:
+                        dividend_yield *= 100  # Convert to percentage
+                    st.metric("Dividend Yield", format_percent(dividend_yield) if dividend_yield else "N/A")
+                    
+                with col3:
+                    eps = stock_info.get('trailingEps', None)
+                    st.metric("EPS (TTM)", format_currency(eps) if eps else "N/A")
+                    
+                with col4:
+                    target_price = stock_info.get('targetMeanPrice', None)
+                    st.metric("Target Price", format_currency(target_price) if target_price else "N/A")
             
             # Price chart
             st.subheader("Price History")
@@ -291,18 +341,20 @@ if st.sidebar.button("Fetch Stock Data"):
             
             # Download button for CSV
             csv = table_data.to_csv(index=False)
+            file_prefix = "crypto" if asset_type == "Cryptocurrency" else "stock"
             st.download_button(
                 label="Download CSV",
                 data=csv,
-                file_name=f"{ticker}_stock_data.csv",
+                file_name=f"{ticker}_{file_prefix}_data.csv",
                 mime="text/csv",
             )
         else:
-            st.error(f"Could not fetch data for {ticker}. Please check the stock symbol and try again.")
+            asset_type_label = "cryptocurrency" if asset_type == "Cryptocurrency" else "stock"
+            st.error(f"Could not fetch data for {ticker}. Please check the {asset_type_label} symbol and try again.")
 
 # Initial instructions
 if "ticker_input" not in locals() or not ticker_input:
-    st.info("👈 Enter a stock symbol in the sidebar and click 'Fetch Stock Data' to begin analysis.")
+    st.info("👈 Enter a stock or cryptocurrency symbol in the sidebar and click 'Fetch Data' to begin analysis.")
     
 # Footer
 st.markdown("---")
