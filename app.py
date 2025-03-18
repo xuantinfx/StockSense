@@ -2,362 +2,308 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
 import numpy as np
-import re
+from datetime import datetime, timedelta
 
-# Set page configuration
+# Set page config
 st.set_page_config(
     page_title="Stock Data Analyzer",
     page_icon="📈",
     layout="wide"
 )
 
-# Function to validate stock symbol
-def is_valid_stock_symbol(symbol):
-    # Basic validation: alphanumeric with optional dots or hyphens
-    pattern = re.compile(r'^[A-Za-z0-9\.\-]+$')
-    return bool(pattern.match(symbol))
-
 # Function to get stock data
-@st.cache_data(ttl=300)  # Cache data for 5 minutes
-def get_stock_data(symbol, period="1y"):
+@st.cache_data(ttl=3600)  # Cache data for 1 hour
+def get_stock_data(ticker, period="1y"):
     try:
-        # Get stock info
-        stock = yf.Ticker(symbol)
+        stock = yf.Ticker(ticker)
         info = stock.info
         
         # Get historical data
         hist = stock.history(period=period)
         
-        if hist.empty:
-            return None, None, f"No data available for {symbol}"
+        # Calculate technical indicators
+        # Moving Averages
+        hist['MA20'] = hist['Close'].rolling(window=20).mean()
+        hist['MA50'] = hist['Close'].rolling(window=50).mean()
+        hist['MA200'] = hist['Close'].rolling(window=200).mean()
         
-        return stock, hist, None
+        # RSI (Relative Strength Index)
+        delta = hist['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        hist['RSI'] = 100 - (100 / (1 + rs))
+        
+        # MACD (Moving Average Convergence Divergence)
+        hist['EMA12'] = hist['Close'].ewm(span=12, adjust=False).mean()
+        hist['EMA26'] = hist['Close'].ewm(span=26, adjust=False).mean()
+        hist['MACD'] = hist['EMA12'] - hist['EMA26']
+        hist['Signal_Line'] = hist['MACD'].ewm(span=9, adjust=False).mean()
+        
+        # Bollinger Bands
+        hist['Middle_Band'] = hist['Close'].rolling(window=20).mean()
+        std = hist['Close'].rolling(window=20).std()
+        hist['Upper_Band'] = hist['Middle_Band'] + (std * 2)
+        hist['Lower_Band'] = hist['Middle_Band'] - (std * 2)
+        
+        return hist, info
     except Exception as e:
-        return None, None, f"Error retrieving data for {symbol}: {str(e)}"
+        st.error(f"Error retrieving data for {ticker}: {e}")
+        return None, None
 
-# Function to calculate technical indicators
-def calculate_technical_indicators(df):
-    # Calculate 20-day and 50-day moving averages
-    df['MA20'] = df['Close'].rolling(window=20).mean()
-    df['MA50'] = df['Close'].rolling(window=50).mean()
+# Function to create interactive chart
+def create_stock_chart(data, ticker):
+    fig = go.Figure()
     
-    # Calculate Relative Strength Index (RSI)
-    delta = df['Close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
-    rs = gain / loss
-    df['RSI'] = 100 - (100 / (1 + rs))
+    # Candlestick chart
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data['Open'],
+        high=data['High'],
+        low=data['Low'],
+        close=data['Close'],
+        name='Price'
+    ))
     
-    # Calculate MACD
-    df['EMA12'] = df['Close'].ewm(span=12, adjust=False).mean()
-    df['EMA26'] = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = df['EMA12'] - df['EMA26']
-    df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    # Add Moving Averages
+    fig.add_trace(go.Scatter(x=data.index, y=data['MA20'], mode='lines', name='MA 20', line=dict(color='blue', width=1)))
+    fig.add_trace(go.Scatter(x=data.index, y=data['MA50'], mode='lines', name='MA 50', line=dict(color='orange', width=1)))
+    fig.add_trace(go.Scatter(x=data.index, y=data['MA200'], mode='lines', name='MA 200', line=dict(color='green', width=1)))
     
-    return df
+    # Configure layout
+    fig.update_layout(
+        title=f'{ticker} Stock Price',
+        xaxis_title='Date',
+        yaxis_title='Price (USD)',
+        xaxis_rangeslider_visible=True,
+        height=600,
+        template='plotly_white'
+    )
+    
+    return fig
 
-# Function to format currency
+# Function to create technical indicators chart
+def create_technical_chart(data, indicator):
+    fig = go.Figure()
+    
+    if indicator == 'RSI':
+        fig.add_trace(go.Scatter(x=data.index, y=data['RSI'], mode='lines', name='RSI'))
+        fig.add_shape(type="line", x0=data.index[0], y0=70, x1=data.index[-1], y1=70,
+                      line=dict(color="red", width=1, dash="dash"))
+        fig.add_shape(type="line", x0=data.index[0], y0=30, x1=data.index[-1], y1=30,
+                      line=dict(color="green", width=1, dash="dash"))
+        fig.update_layout(
+            title='Relative Strength Index (RSI)',
+            yaxis_title='RSI',
+            height=300
+        )
+    
+    elif indicator == 'MACD':
+        fig.add_trace(go.Scatter(x=data.index, y=data['MACD'], mode='lines', name='MACD'))
+        fig.add_trace(go.Scatter(x=data.index, y=data['Signal_Line'], mode='lines', name='Signal Line'))
+        
+        # Add MACD histogram
+        colors = ['green' if val >= 0 else 'red' for val in (data['MACD'] - data['Signal_Line'])]
+        fig.add_trace(go.Bar(
+            x=data.index, 
+            y=data['MACD'] - data['Signal_Line'],
+            name='Histogram',
+            marker_color=colors
+        ))
+        
+        fig.update_layout(
+            title='Moving Average Convergence Divergence (MACD)',
+            yaxis_title='Value',
+            height=300
+        )
+    
+    elif indicator == 'Bollinger':
+        fig.add_trace(go.Scatter(x=data.index, y=data['Close'], mode='lines', name='Close Price'))
+        fig.add_trace(go.Scatter(x=data.index, y=data['Upper_Band'], mode='lines', name='Upper Band', line=dict(width=1)))
+        fig.add_trace(go.Scatter(x=data.index, y=data['Middle_Band'], mode='lines', name='Middle Band', line=dict(width=1)))
+        fig.add_trace(go.Scatter(x=data.index, y=data['Lower_Band'], mode='lines', name='Lower Band', line=dict(width=1)))
+        
+        fig.update_layout(
+            title='Bollinger Bands',
+            yaxis_title='Price',
+            height=300
+        )
+    
+    return fig
+
+# Format currency values
 def format_currency(value):
-    if value is None or pd.isna(value):
+    if pd.isna(value):
         return "N/A"
-    return f"${value:,.2f}"
-
-# Function to format large numbers
-def format_number(value):
-    if value is None or pd.isna(value):
-        return "N/A"
-    
-    if value >= 1_000_000_000:
-        return f"{value/1_000_000_000:.2f}B"
-    elif value >= 1_000_000:
-        return f"{value/1_000_000:.2f}M"
-    elif value >= 1_000:
-        return f"{value/1_000:.2f}K"
+    if value >= 1e12:
+        return f"${value/1e12:.2f}T"
+    elif value >= 1e9:
+        return f"${value/1e9:.2f}B"
+    elif value >= 1e6:
+        return f"${value/1e6:.2f}M"
     else:
-        return f"{value:.2f}"
+        return f"${value:.2f}"
 
-# Function to format percentage
-def format_percentage(value):
-    if value is None or pd.isna(value):
+# Format percentage values
+def format_percent(value):
+    if pd.isna(value):
         return "N/A"
     return f"{value:.2f}%"
 
-# App title and description
+# Main app
 st.title("📈 Stock Data Analyzer")
-st.markdown("Retrieve and analyze stock data from Yahoo Finance")
 
-# Input for stock symbol
-col1, col2 = st.columns([3, 1])
-with col1:
-    symbol = st.text_input("Enter Stock Symbol (e.g., AAPL, MSFT, GOOGL)", "AAPL").upper()
-with col2:
-    period = st.selectbox(
-        "Select Time Period",
-        options=["1mo", "3mo", "6mo", "1y", "2y", "5y", "max"],
-        index=3
-    )
+# User input
+st.sidebar.header("Enter Stock Symbol")
+ticker_input = st.sidebar.text_input("Stock Symbol (e.g., AAPL, MSFT, GOOGL)", "AAPL")
+ticker = ticker_input.upper().strip()
 
-# Validate and fetch data only when a valid symbol is entered
-if symbol:
-    if not is_valid_stock_symbol(symbol):
-        st.error("Invalid stock symbol. Please enter a valid symbol.")
-    else:
-        with st.spinner(f"Loading data for {symbol}..."):
-            stock, hist_data, error = get_stock_data(symbol, period)
+# Time period selection
+period_options = {
+    "1 Month": "1mo",
+    "3 Months": "3mo",
+    "6 Months": "6mo",
+    "Year to Date": "ytd",
+    "1 Year": "1y",
+    "5 Years": "5y",
+    "Max": "max"
+}
+selected_period = st.sidebar.selectbox("Select Time Period", list(period_options.keys()))
+period = period_options[selected_period]
+
+# Technical indicators selection
+tech_indicators = st.sidebar.multiselect(
+    "Select Technical Indicators",
+    ["RSI", "MACD", "Bollinger"],
+    default=["RSI"]
+)
+
+# Fetch data button
+if st.sidebar.button("Fetch Stock Data"):
+    # Show loading spinner
+    with st.spinner(f"Fetching data for {ticker}..."):
+        # Get data
+        hist_data, stock_info = get_stock_data(ticker, period)
+        
+        if hist_data is not None and stock_info is not None:
+            # Success message
+            st.sidebar.success(f"Data fetched successfully for {ticker}")
             
-            if error:
-                st.error(error)
-            elif stock and hist_data is not None:
-                # Get company info
-                info = stock.info
+            # Company info
+            st.header(f"{stock_info.get('shortName', ticker)} ({ticker})")
+            
+            # Company description
+            with st.expander("Company Description"):
+                st.write(stock_info.get('longBusinessSummary', 'No description available'))
+            
+            # Key metrics
+            st.subheader("Key Metrics")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Current Price", format_currency(stock_info.get('currentPrice', None)))
                 
-                # Display company header
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    company_name = info.get('longName', symbol)
-                    st.header(f"{company_name} ({symbol})")
-                    exchange = info.get('exchange', 'N/A')
-                    sector = info.get('sector', 'N/A')
-                    st.markdown(f"**Exchange:** {exchange} | **Sector:** {sector}")
+            with col2:
+                previous_close = stock_info.get('previousClose', None)
+                current_price = stock_info.get('currentPrice', None)
                 
-                with col2:
-                    # Current price and daily change
-                    if not hist_data.empty:
-                        current_price = hist_data['Close'].iloc[-1]
-                        prev_close = info.get('previousClose', hist_data['Close'].iloc[-2] if len(hist_data) > 1 else current_price)
-                        price_change = current_price - prev_close
-                        price_change_percent = (price_change / prev_close) * 100 if prev_close else 0
-                        
-                        price_color = "green" if price_change >= 0 else "red"
-                        change_icon = "▲" if price_change >= 0 else "▼"
-                        
-                        st.markdown(f"<h2 style='margin-bottom:0px'>{format_currency(current_price)}</h2>", unsafe_allow_html=True)
-                        st.markdown(
-                            f"<p style='color:{price_color};font-size:1.2rem;margin-top:0px'>{change_icon} {format_currency(abs(price_change))} ({price_change_percent:.2f}%)</p>",
-                            unsafe_allow_html=True
-                        )
+                if previous_close is not None and current_price is not None:
+                    daily_change = ((current_price - previous_close) / previous_close) * 100
+                    st.metric("Daily Change", format_percent(daily_change), format_percent(daily_change))
+                else:
+                    st.metric("Daily Change", "N/A")
                 
-                # Key metrics
-                st.subheader("Key Financial Metrics")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    market_cap = info.get('marketCap', None)
-                    st.metric("Market Cap", format_number(market_cap))
-                    
-                    volume = info.get('volume', None)
-                    st.metric("Volume", format_number(volume))
+            with col3:
+                market_cap = stock_info.get('marketCap', None)
+                st.metric("Market Cap", format_currency(market_cap) if market_cap else "N/A")
                 
-                with col2:
-                    pe_ratio = info.get('trailingPE', None)
-                    st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio and not pd.isna(pe_ratio) else "N/A")
-                    
-                    eps = info.get('trailingEps', None)
-                    st.metric("EPS", format_currency(eps) if eps else "N/A")
+            with col4:
+                volume = stock_info.get('volume', None)
+                if volume:
+                    if volume >= 1e9:
+                        volume_str = f"{volume/1e9:.2f}B"
+                    elif volume >= 1e6:
+                        volume_str = f"{volume/1e6:.2f}M"
+                    else:
+                        volume_str = f"{volume}"
+                    st.metric("Volume", volume_str)
+                else:
+                    st.metric("Volume", "N/A")
+            
+            # Additional metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                pe_ratio = stock_info.get('trailingPE', None)
+                st.metric("P/E Ratio", f"{pe_ratio:.2f}" if pe_ratio else "N/A")
                 
-                with col3:
-                    dividend_yield = info.get('dividendYield', None)
-                    if dividend_yield and not pd.isna(dividend_yield):
-                        dividend_yield = dividend_yield * 100  # Convert to percentage
-                    st.metric("Dividend Yield", format_percentage(dividend_yield) if dividend_yield else "N/A")
-                    
-                    beta = info.get('beta', None)
-                    st.metric("Beta", f"{beta:.2f}" if beta and not pd.isna(beta) else "N/A")
+            with col2:
+                dividend_yield = stock_info.get('dividendYield', None)
+                if dividend_yield:
+                    dividend_yield *= 100  # Convert to percentage
+                st.metric("Dividend Yield", format_percent(dividend_yield) if dividend_yield else "N/A")
                 
-                with col4:
-                    fifty_two_week_high = info.get('fiftyTwoWeekHigh', None)
-                    st.metric("52 Week High", format_currency(fifty_two_week_high))
-                    
-                    fifty_two_week_low = info.get('fiftyTwoWeekLow', None)
-                    st.metric("52 Week Low", format_currency(fifty_two_week_low))
+            with col3:
+                eps = stock_info.get('trailingEps', None)
+                st.metric("EPS (TTM)", format_currency(eps) if eps else "N/A")
                 
-                # Calculate technical indicators
-                if not hist_data.empty:
-                    tech_data = calculate_technical_indicators(hist_data.copy())
-                    
-                    # Interactive Price Chart
-                    st.subheader("Price History and Technical Indicators")
-                    
-                    # Chart type and indicator selection
-                    col1, col2 = st.columns([1, 2])
-                    with col1:
-                        chart_type = st.selectbox(
-                            "Chart Type",
-                            options=["Line", "Candlestick"],
-                            index=0
-                        )
-                    
-                    with col2:
-                        indicators = st.multiselect(
-                            "Technical Indicators",
-                            options=["Moving Averages", "RSI", "MACD"],
-                            default=["Moving Averages"]
-                        )
-                    
-                    # Create figure
-                    fig = go.Figure()
-                    
-                    if chart_type == "Line":
-                        fig.add_trace(
-                            go.Scatter(
-                                x=tech_data.index,
-                                y=tech_data["Close"],
-                                mode="lines",
-                                name="Close Price",
-                                line=dict(color="#1f77b4", width=2)
-                            )
-                        )
-                    else:  # Candlestick
-                        fig.add_trace(
-                            go.Candlestick(
-                                x=tech_data.index,
-                                open=tech_data["Open"],
-                                high=tech_data["High"],
-                                low=tech_data["Low"],
-                                close=tech_data["Close"],
-                                name="Price"
-                            )
-                        )
-                    
-                    # Add technical indicators
-                    if "Moving Averages" in indicators:
-                        fig.add_trace(
-                            go.Scatter(
-                                x=tech_data.index,
-                                y=tech_data["MA20"],
-                                mode="lines",
-                                name="20-day MA",
-                                line=dict(color="orange", width=1.5)
-                            )
-                        )
-                        fig.add_trace(
-                            go.Scatter(
-                                x=tech_data.index,
-                                y=tech_data["MA50"],
-                                mode="lines",
-                                name="50-day MA",
-                                line=dict(color="red", width=1.5)
-                            )
-                        )
-                    
-                    # Configure layout
-                    fig.update_layout(
-                        title=f"{symbol} Price History",
-                        xaxis_title="Date",
-                        yaxis_title="Price (USD)",
-                        hovermode="x unified",
-                        legend=dict(
-                            orientation="h",
-                            yanchor="bottom",
-                            y=1.02,
-                            xanchor="right",
-                            x=1
-                        )
-                    )
-                    
-                    # Display main chart
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # Display additional indicators in separate charts if selected
-                    if "RSI" in indicators:
-                        # RSI Chart
-                        fig_rsi = go.Figure()
-                        fig_rsi.add_trace(
-                            go.Scatter(
-                                x=tech_data.index,
-                                y=tech_data["RSI"],
-                                mode="lines",
-                                name="RSI",
-                                line=dict(color="purple", width=1.5)
-                            )
-                        )
-                        
-                        # Add overbought/oversold lines
-                        fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", annotation_text="Overbought")
-                        fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", annotation_text="Oversold")
-                        
-                        fig_rsi.update_layout(
-                            title="Relative Strength Index (RSI)",
-                            xaxis_title="Date",
-                            yaxis_title="RSI",
-                            yaxis=dict(range=[0, 100])
-                        )
-                        
-                        st.plotly_chart(fig_rsi, use_container_width=True)
-                    
-                    if "MACD" in indicators:
-                        # MACD Chart
-                        fig_macd = go.Figure()
-                        fig_macd.add_trace(
-                            go.Scatter(
-                                x=tech_data.index,
-                                y=tech_data["MACD"],
-                                mode="lines",
-                                name="MACD",
-                                line=dict(color="blue", width=1.5)
-                            )
-                        )
-                        fig_macd.add_trace(
-                            go.Scatter(
-                                x=tech_data.index,
-                                y=tech_data["Signal"],
-                                mode="lines",
-                                name="Signal",
-                                line=dict(color="red", width=1.5)
-                            )
-                        )
-                        
-                        # Add MACD histogram
-                        fig_macd.add_trace(
-                            go.Bar(
-                                x=tech_data.index,
-                                y=tech_data["MACD"] - tech_data["Signal"],
-                                name="Histogram",
-                                marker_color=np.where(
-                                    tech_data["MACD"] - tech_data["Signal"] >= 0,
-                                    "green",
-                                    "red"
-                                )
-                            )
-                        )
-                        
-                        fig_macd.update_layout(
-                            title="Moving Average Convergence Divergence (MACD)",
-                            xaxis_title="Date",
-                            yaxis_title="MACD"
-                        )
-                        
-                        st.plotly_chart(fig_macd, use_container_width=True)
-                    
-                    # Historical Data Table
-                    st.subheader("Historical Data")
-                    
-                    # Prepare data for display
-                    display_data = hist_data.copy()
-                    display_data = display_data.sort_index(ascending=False)  # Show most recent first
-                    display_data.index = display_data.index.strftime('%Y-%m-%d')
-                    display_data = display_data.round(2)
-                    
-                    # Show the table
-                    st.dataframe(display_data, use_container_width=True)
-                    
-                    # Download button for CSV
-                    csv = display_data.to_csv()
-                    st.download_button(
-                        label="Download data as CSV",
-                        data=csv,
-                        file_name=f"{symbol}_historical_data.csv",
-                        mime="text/csv",
-                    )
-                    
-                    # Summary and description
-                    st.subheader("Company Summary")
-                    business_summary = info.get('longBusinessSummary', 'No business summary available.')
-                    st.write(business_summary)
-            else:
-                st.error(f"No data available for {symbol}")
+            with col4:
+                target_price = stock_info.get('targetMeanPrice', None)
+                st.metric("Target Price", format_currency(target_price) if target_price else "N/A")
+            
+            # Price chart
+            st.subheader("Price History")
+            price_chart = create_stock_chart(hist_data, ticker)
+            st.plotly_chart(price_chart, use_container_width=True)
+            
+            # Technical indicators
+            if tech_indicators:
+                st.subheader("Technical Indicators")
+                for indicator in tech_indicators:
+                    tech_chart = create_technical_chart(hist_data, indicator)
+                    st.plotly_chart(tech_chart, use_container_width=True)
+            
+            # Data table
+            st.subheader("Historical Data")
+            
+            # Prepare data table
+            table_data = hist_data.copy()
+            # Format columns to 2 decimal places
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume', 'MA20', 'MA50', 'MA200', 'RSI', 'MACD', 'Signal_Line']:
+                if col in table_data.columns:
+                    if col == 'Volume':
+                        # Format volume as integers
+                        table_data[col] = table_data[col].astype(int)
+                    else:
+                        # Format prices with 2 decimal places
+                        table_data[col] = table_data[col].round(2)
+            
+            # Reset index to make Date a column
+            table_data = table_data.reset_index()
+            
+            # Convert Date to string format
+            table_data['Date'] = table_data['Date'].dt.strftime('%Y-%m-%d')
+            
+            # Display table
+            st.dataframe(table_data, use_container_width=True)
+            
+            # Download button for CSV
+            csv = table_data.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name=f"{ticker}_stock_data.csv",
+                mime="text/csv",
+            )
+        else:
+            st.error(f"Could not fetch data for {ticker}. Please check the stock symbol and try again.")
 
+# Initial instructions
+if "ticker_input" not in locals() or not ticker_input:
+    st.info("👈 Enter a stock symbol in the sidebar and click 'Fetch Stock Data' to begin analysis.")
+    
 # Footer
 st.markdown("---")
-st.markdown("Data provided by Yahoo Finance through yfinance")
+st.markdown("Data provided by Yahoo Finance. Powered by Streamlit.")
